@@ -1,69 +1,190 @@
 # 🛡️ DeepFake Detection System (MTCNN + Xception)
 
-Hệ thống phát hiện video giả mạo (DeepFake) sử dụng kiến trúc mô hình Xception kết hợp với kỹ thuật trích xuất khuôn mặt dựa trên phân tích chuyển động bằng MTCNN. Dự án được tối ưu hóa cho tập dữ liệu FaceForensics++.
+Hệ thống phát hiện video giả mạo (**DeepFake Detection**) sử dụng kiến trúc **Xception** kết hợp với **MTCNN face detection** và chiến lược **motion-based frame selection** để phát hiện các artifacts bất thường trong video. Pipeline được tối ưu cho tập dữ liệu **FaceForensics++**.
+
+---
 
 ## 📋 Mục lục
-- [Tổng quan quy trình](#tổng-quan-quy-trình)
-- [Cài đặt](#cài-đặt)
-- [Cấu trúc mô hình](#cấu-trúc-mô-hình)
-- [Chiến lược huấn luyện](#chiến-lược-huấn-luyện)
-- [Đánh giá](#đánh-giá)
 
-## 🔄 Tổng quan quy trình (Pipeline)
+* [Tổng quan](#-tổng-quan)
+* [Pipeline hệ thống](#-pipeline-hệ-thống)
+* [Kiến trúc mô hình](#-kiến-trúc-mô-hình)
+* [Training Strategy](#-training-strategy)
+* [Kết quả đánh giá](#-kết-quả-đánh-giá)
+* [Phân tích kết quả](#-phân-tích-kết-quả)
+* [Demo Inference](#-demo-inference)
+* [Cài đặt](#-cài-đặt)
+* [Sử dụng](#-sử-dụng)
 
-1.  **Tiền xử lý (Preprocessing):**
-    *   Sử dụng **MTCNN** để nhận diện khuôn mặt.
-    *   **Motion-based selection:** Tính toán sự sai khác giữa các khung hình (`absdiff`) để chọn ra 10 khung hình có chuyển động mạnh nhất (nơi DeepFake thường lộ lỗi artifacts).
-    *   Chuẩn hóa ảnh về kích thước $299 \times 299$ để phù hợp với Xception.
-2.  **Huấn luyện (Training):**
-    *   Sử dụng mạng **Xception** đã được huấn luyện trước trên ImageNet.
-    *   Fine-tuning qua 3 giai đoạn để đạt độ chính xác tối ưu.
-3.  **Dự đoán (Inference):**
-    *   Dự đoán theo cấp độ Video (**Video-level**): Lấy trung bình xác suất của 10 khung hình để đưa ra kết quả cuối cùng.
+---
+
+## 🔍 Tổng quan
+
+Bài toán: phân loại video thành **REAL** hoặc **FAKE** ở mức **video-level**.
+
+### Ý tưởng chính
+
+* Chỉ lấy các frame có chuyển động mạnh nhất để tăng xác suất bắt được DeepFake artifacts.
+* Dự đoán từng frame bằng Xception.
+* Trung bình xác suất của toàn bộ frame để đưa ra verdict cuối cùng.
+
+---
+
+## 🔄 Pipeline hệ thống
+
+```text
+Input Video
+   ↓
+MTCNN Face Detection
+   ↓
+Motion-based Frame Selection (Top-K Motion Frames)
+   ↓
+Face Crop + Resize 299x299
+   ↓
+Xception Classification
+   ↓
+Mean Aggregation
+   ↓
+Video-level Verdict
+```
+
+---
+
+## 🧠 Kiến trúc mô hình
+
+* **Backbone:** Xception pretrained on ImageNet
+* **GlobalAveragePooling2D**
+* **Dropout:** 0.5
+* **Dense Softmax Head:** 2 classes (REAL / FAKE)
+
+---
+
+## 📈 Training Strategy
+
+| Stage   | Mô tả                                  | Learning Rate |
+| ------- | -------------------------------------- | ------------- |
+| Stage 1 | Freeze backbone, train classifier head | 1e-3          |
+| Stage 2 | Unfreeze 30 lớp cuối                   | 1e-4          |
+| Stage 3 | Full fine-tuning                       | 1e-5          |
+
+### Training Curves
+
+![Training Curves](src/training_stages.png)
+
+---
+
+## 📊 Kết quả đánh giá
+
+### Classification Report (Video-level)
+
+| Class            | Precision | Recall | F1-score   | Support |
+| ---------------- | --------- | ------ | ---------- | ------- |
+| REAL             | 0.6154    | 0.2667 | 0.3721     | 30      |
+| FAKE             | 0.5319    | 0.8333 | 0.6494     | 30      |
+| **Accuracy**     | -         | -      | **0.5500** | 60      |
+| **Macro Avg**    | 0.5736    | 0.5500 | 0.5107     | 60      |
+| **Weighted Avg** | 0.5736    | 0.5500 | 0.5107     | 60      |
+
+---
+
+### ROC / PR Metrics
+
+| Metric                     | Score      |
+| -------------------------- | ---------- |
+| ROC-AUC                    | **0.5389** |
+| Average Precision (PR-AUC) | **0.5462** |
+| Best F1                    | **0.682**  |
+| Optimal Threshold          | **0.50**   |
+
+---
+
+## 📉 Visualization
+
+### Confusion Matrix + ROC Curve
+
+![Confusion Matrix & ROC](src/confusion_roc.png)
+
+### Precision Recall + Threshold Optimization
+
+![PR Threshold](src/pr_threshold.png)
+
+---
+
+## 🧪 Demo Inference
+
+### Ví dụ dự đoán trên video test
+
+![Demo Prediction](src/demo_prediction.png)
+
+**Prediction Result:**
+
+* Ground Truth: **FAKE**
+* Model Prediction: **FAKE**
+* Confidence: **50.0%**
+
+---
+
+## 📌 Phân tích kết quả
+
+### Điểm mạnh
+
+* Recall cho class **FAKE = 83.33%** → model bắt khá tốt DeepFake.
+* Motion-based sampling giúp giảm số frame cần xử lý nhưng vẫn giữ signal mạnh.
+* Pipeline inference nhanh, phù hợp deployment thực tế.
+
+### Hạn chế hiện tại
+
+* ROC-AUC còn thấp (**0.539**) → model mới nhỉnh hơn random baseline.
+* Recall class REAL thấp (**26.67%**) → bias dự đoán về FAKE.
+* Output probabilities đang tập trung quanh 0.5 → dấu hiệu model chưa học được boundary rõ ràng.
+
+### Hướng cải thiện đề xuất
+
+* Tăng dataset / augment mạnh hơn.
+* Sử dụng temporal model (LSTM / Transformer / TimeSformer).
+* Thay mean aggregation bằng attention pooling.
+* Fine-tune threshold riêng cho business objective.
+
+---
 
 ## 🚀 Cài đặt
 
-1. **Clone project:**
 ```bash
 git clone <your-repo-url>
 cd DFD
-```
-
-2. **Cài đặt thư viện:**
-```bash
 pip install -r requirements.txt
 ```
 
-3. **Cấu hình dữ liệu:**
-Chỉnh sửa đường dẫn `FF_REAL_PATH` và `FF_FAKE_PATH` trong file notebook/script để trỏ đến tập dữ liệu FaceForensics++ của bạn.
+---
 
-## 🧠 Cấu trúc mô hình
-
-*   **Base:** Xception (Frozen/Unfrozen tùy giai đoạn).
-*   **GlobalAveragePooling2D:** Giảm số lượng tham số và tránh overfitting.
-*   **Dropout (0.5):** Tăng khả năng tổng quát hóa của mô hình.
-*   **Dense (2, Softmax):** Phân loại REAL và FAKE.
-
-## 📈 Chiến lược huấn luyện
-
-| Giai đoạn | Mục tiêu | Learning Rate |
-| :--- | :--- | :--- |
-| **Stage 1** | Chỉ huấn luyện lớp phân loại (Head) | 1e-3 |
-| **Stage 2** | Mở khóa 30 lớp cuối của Xception | 1e-4 |
-| **Stage 3** | Tinh chỉnh toàn bộ mạng (Full Fine-tune) | 1e-5 |
-
-## 📊 Kết quả & Đánh giá
-
-Mô hình được đánh giá trên tập Test (15%) với các chỉ số:
-*   **ROC-AUC Score:** Đánh giá khả năng phân loại tổng quát.
-*   **Precision-Recall Curve:** Tìm ngưỡng (threshold) tối ưu để cân bằng giữa việc nhận dạng nhầm và bỏ sót.
-*   **Confusion Matrix:** Trực quan hóa kết quả dự đoán trên từng video.
-
-## 💻 Sử dụng thực tế
-
-Bạn có thể sử dụng hàm `predict_video` để kiểm tra một video bất kỳ:
+## 💻 Sử dụng
 
 ```python
 score, verdict = predict_video("path/to/video.mp4", model, detector)
 print(f"Kết quả: {verdict} với {score*100:.2f}% xác suất là FAKE")
 ```
+
+---
+
+## 📂 Cấu trúc thư mục đề xuất
+
+```text
+project/
+│
+├── src/
+│   ├── training_stages.png
+│   ├── confusion_roc.png
+│   ├── pr_threshold.png
+│   └── demo_prediction.png
+│
+├── notebooks/
+├── models/
+├── README.md
+└── requirements.txt
+```
+
+---
+
+## 📜 License
+
+MIT License
